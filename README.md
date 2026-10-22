@@ -46,7 +46,7 @@ GitHub Desktop 的“0 changed files”表示没有待提交修改；已提交�
 
 ## macOS 构建
 
-GitHub Actions 工作流 [Build macOS](.github/workflows/build-macos.yml) 在推送 `main` 或 `codex/**` 分支的相关代码后，先由 Windows job 使用固定 xollvm 工具链生成两架构的 Mach-O 策略 object，再由原生 Apple Silicon 和 Intel runner 核对、链接和测试。Mac job 无需在 Intel Homebrew 环境安装 LLVM。仓库变量 `CARDGUARD_PUBLIC_KEY_HEX` 必须设置为当前 `config/trusted-public-key.hex` 的 64 位公钥；私钥与 DPAPI 文件留在本机。
+GitHub Actions 工作流 [Build macOS](.github/workflows/build-macos.yml) 在推送 `main` 或 `codex/**` 分支的相关代码后，先由 Windows job 使用固定 xollvm 工具链生成两架构的 Mach-O 策略 object，再由原生 Apple Silicon 和 Intel runner 核对、链接和测试。Mac job 无需在 Intel Homebrew 环境安装 LLVM。仓库变量 `CARDGUARD_PUBLIC_KEY_HEX` 必须设置为当前 `config/trusted-public-key.hex` 的 64 位公钥；正在使用的 `.local` 身份与 DPAPI 文件留在本机，公开的加密演示快照见下文。
 
 成功运行的 Artifacts 中有 `CardGuard-macos-arm64`、`CardGuard-macos-x86_64` 两个下载项。各自包含 `.app` 的 ZIP 和 SHA256 文件；下载后解开外层 Actions ZIP，再在 Mac 上解开内层程序 ZIP，保留执行权限、framework 链接和签名。两个版本分别适用于 Apple Silicon 和 Intel；并非 Universal 二合一包。
 
@@ -90,7 +90,9 @@ Qt 6.12 官方仓库已经改为按编译器分目录，aqt 3.3 尚不支持。�
 
 ## 发行密钥
 
-`init-demo.ps1` 首次生成随机 Ed25519 私钥，以 Argon2id（64 MiB、3 次、单线程）派生密钥，使用 ChaCha20-Poly1305 加密私钥。随机口令由当前 Windows 用户 DPAPI 保护，演示文件放在受限 ACL 的 `.local`，不会提交 Git。
+`init-demo.ps1` 首次生成随机 Ed25519 私钥，以 Argon2id（64 MiB、3 次、单线程）派生密钥，使用 ChaCha20-Poly1305 加密私钥。随机口令由当前 Windows 用户 DPAPI 保护，正在使用的身份文件放在受限 ACL 的 `.local`，该目录不提交 Git。
+
+按项目所有者要求，仓库公开了一份现有加密演示私钥的原样快照：[demo/keys/demo.private.json](demo/keys/demo.private.json)。口令、DPAPI 文件和卡密未提交，单独克隆仓库不能解密该快照；初始化脚本不会自动加载它。此身份仅用于 demo，正式发行应另建私钥。
 
 这是开发便利模式：同一 Windows 用户的进程可以解密 DPAPI 口令，因此它不能替代独立生产签发服务或 HSM。请备份演示身份；若初始化中断，脚本会报告部分身份存在，不会静默覆盖。
 

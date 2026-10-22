@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "kdf": "argon2id-v19",
+  "memory_kib": 65536,
+  "iterations": 3,
+  "parallelism": 1,
+  "cipher": "chacha20poly1305",
+  "salt": "56OAThYhFSTU6o8Kpov0PA",
+  "nonce": "DsMNmhp2JzKy2gV6",
+  "ciphertext": "AyRvgFX9xPDZx6itGonKsZxuGJMnkXj_p6yzL6MnaLETrjnir4Wo4KPFaYdVQkfK"
+}

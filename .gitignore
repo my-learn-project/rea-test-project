@@ -47,6 +47,9 @@ CMakeLists.txt.user*
 demo-card.txt
 invalid-card.txt
 
+# 项目所有者明确公开的加密演示私钥快照（不包含口令）
+!/demo/keys/demo.private.json
+
 # 本机选择的验签公钥；CI 通过仓库变量注入，保留 .hex.example
 /config/trusted-public-key.hex
 
