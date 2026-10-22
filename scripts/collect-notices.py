@@ -19,6 +19,10 @@ import sys
 
 DEFAULT_TARGET = "x86_64-pc-windows-msvc"
 TARGETS = (DEFAULT_TARGET, "aarch64-apple-darwin", "x86_64-apple-darwin")
+# Cargo can color only the duplicate marker even when the package/license text
+# is plain. Strip complete terminal formatting before interpreting that marker.
+ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
+DUPLICATE_MARKER = re.compile(r"(?:\s+\(\*\))+$")
 PACKAGE = re.compile(
     r"(?P<name>[A-Za-z0-9][A-Za-z0-9_-]*) "
     r"v(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)"
@@ -75,14 +79,16 @@ def safe_component(component: str) -> None:
 def parse_tree(output: str, project: Path) -> list[dict]:
     packages: dict[tuple[str, str], dict] = {}
     for line in output.splitlines():
-        line = line.strip()
+        line = ANSI_ESCAPE.sub("", line).strip()
+        if any(ord(character) < 32 and character != "\t" for character in line):
+            raise RuntimeError("Unexpected control characters in cargo tree output")
         if not line or line.startswith("["):
             continue
         if "|" not in line:
             raise RuntimeError(f"Unexpected cargo tree output: {line}")
         description, license_expression = line.split("|", 1)
-        description = description.removesuffix(" (*)").replace(" (proc-macro)", "").strip()
-        license_expression = license_expression.removesuffix(" (*)").strip()
+        description = DUPLICATE_MARKER.sub("", description).replace(" (proc-macro)", "").strip()
+        license_expression = " ".join(DUPLICATE_MARKER.sub("", license_expression).split())
         match = PACKAGE.fullmatch(description)
         if not match:
             raise RuntimeError(f"Cannot parse cargo package: {description}")
@@ -152,9 +158,10 @@ def main() -> int:
     registry = args.cargo_home.expanduser().resolve() / "registry" / "src"
     if not registry.is_dir():
         raise RuntimeError("Cargo registry source cache is missing; build the locked client first")
-    command = [args.cargo, "tree", "--locked", "--offline", "-p", "license-client", "--target", args.target,
+    command = [args.cargo, "tree", "--color", "never", "--locked", "--offline", "-p", "license-client", "--target", args.target,
                "--prefix", "none", "--format", "{p}|{l}"]
-    environment = dict(os.environ, CARGO_NET_OFFLINE="true", CARGO_HOME=str(args.cargo_home.expanduser().resolve()))
+    environment = dict(os.environ, CARGO_NET_OFFLINE="true", CARGO_TERM_COLOR="never", NO_COLOR="1",
+                       CARGO_HOME=str(args.cargo_home.expanduser().resolve()))
     result = subprocess.run(command, cwd=project, env=environment, check=True,
                             capture_output=True, text=True, encoding="utf-8", timeout=120)
     packages = parse_tree(result.stdout, project)
