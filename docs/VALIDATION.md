@@ -2,7 +2,24 @@
 
 验证日期：2026-10-22（Asia/Shanghai）。此记录对应当前 demo，是工程测试结果，不是独立安全认证。
 
-## 本轮：开源 VM 保护与进程内校验
+## 本轮：公开 demo 身份与跨平台发卡
+
+源码提交 `22e64ff05f972e72747e9938366d5b57cb2aaade` 的 [GitHub Actions 39806565614](https://github.com/my-learn-project/rea-test-project/actions/runs/39806565614) 已全部成功。按项目所有者要求，`demo/keys/` 已同时提供现有 demo 的加密私钥、配套公钥和明文测试口令；这套身份是公开测试材料，任何人均可用它签卡，不适用于正式授权。
+
+- Windows 上实际使用仓库材料签发测试卡，再由现有客户端验签通过。另从 `git archive` 生成只含已提交脚本和测试身份的新目录，成功初始化公钥、签发并回验，全程不依赖本机 `.local` 或 DPAPI。
+- 新增 Python 脚本的 14 项测试在原生 ARM64、Intel Mac 上全部通过；Windows 为 12 项通过、2 项 POSIX 专用检查跳过。检查涵盖已有公钥冲突、输入与子进程输出限制、超时、符号链接拒绝和输出目录权限保持。
+- 两个 Mac 架构均通过 Rust 25 项单元测试和虚拟化授权策略测试。每架构的一次性身份集成报告 `integration.json` 有 20 条通过记录，最终公钥包的 `smoke-release.json` 有 13 条通过记录。
+- 两个架构都以仓库内公开身份给最终 `.app` 实际签卡，`public-demo.json` 各有 **19 条通过记录**，包含真实卡接受、篡改卡拒绝、原生 Cocoa 界面，以及删除或伪造诊断 helper 后仍正确校验。上述报告计数包含套件完成状态。
+- 下载后核对两套程序 ZIP 的 SHA256、CRC、执行权限、framework 链接、Mach-O 架构、Qt 版本、许可材料、公钥指纹、源码提交和 VM 保护元数据，均通过。客户端包不含测试私钥、口令或签发器；源码中的测试材料与可分发客户端分开保存。
+
+最终程序位于 `dist/macos-portable-39806565614/`，六份原生运行报告、截图和本地下载校验结果位于 `build/macos-portable-39806565614/`。这些生成目录被 Git 忽略。Mac 包采用 ad-hoc 签名，不需要 Apple Developer ID 私钥；它未经过 Apple 公证。本机 Windows 只检查制品内容，原生执行由上述 Mac runner 完成。
+
+| 本轮最终 ZIP | SHA256 |
+| --- | --- |
+| `CardGuard-macos-arm64.zip` | `6a36c93ee04869a0cd87f73bfdf89cc3c0052462ad0a51e2504a2a83dc7ba214` |
+| `CardGuard-macos-x86_64.zip` | `b2c994f62ba707e6c132061ac58209ab675ec8aa91ecca04d1f4a00885e191d4` |
+
+## 前轮：开源 VM 保护与进程内校验
 
 Windows Release 已接入 xollvm v0.11.1 / LLVM 22。官方归档 SHA256 为 `762eec5f8274ad45705d3294606c7e7de83c76969db57741b1789aaaa726d1f1`，源版本提交为 `eb0850bd7cc87f551ad2948826605e518f5b8aa2`；安装包与附带许可证均已核对。采用 Clang 内置管线，仅虚拟化 `cardguard_policy_allows`，未改动 Ed25519 实现或 Qt 共享库。
 
