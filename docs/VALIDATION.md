@@ -2,6 +2,20 @@
 
 验证日期：2026-10-22（Asia/Shanghai）。此记录对应当前 demo，是工程测试结果，不是独立安全认证。
 
+## 本轮：开源 VM 保护与进程内校验
+
+Windows Release 已接入 xollvm v0.11.1 / LLVM 22。官方归档 SHA256 为 `762eec5f8274ad45705d3294606c7e7de83c76969db57741b1789aaaa726d1f1`，源版本提交为 `eb0850bd7cc87f551ad2948826605e518f5b8aa2`；安装包与附带许可证均已核对。采用 Clang 内置管线，仅虚拟化 `cardguard_policy_allows`，未改动 Ed25519 实现或 Qt 共享库。
+
+- Rust 格式检查、Clippy 和 **25 项单元测试**通过（客户端 13、协议核心 7、签发端 5），包含 C ABI 空指针、长度、重叠缓冲区、容量、输出完整性和异常边界。
+- xollvm 报告确认策略函数的 VM pass 实际执行并改变代码；O2 后 IR 保留 VM 字节码、解释器及 Windows CFG 元数据。链接同一保护 object 的 **4174 项策略用例**通过。
+- Windows **28 项集成检查**通过：真实发卡与验签、签名篡改、错误机器、异常输入、GUI 授权结果、PE 缓解标志和发行包秘密隔离。
+- 删除完整测试副本中的诊断 helper 后，GUI 仍接受真实卡密、拒绝篡改卡密；放入实际能运行并永远返回成功的假 helper 后，GUI 仍拒绝篡改卡密，调用标记证明它没有运行假 helper。
+- `CardGuard --stdio` 在创建 Qt 窗口前调用同源 Rust 有界协议循环。Windows 发卡和协议测试使用此入口；本机应用控制曾阻止独立诊断 CLI，未关闭系统策略。GUI 的正常校验直接通过静态链接的 Rust ABI 完成。
+- 完整 ZIP 的 **86 个文件**逐一与分发目录比较 SHA256，一致。分发目录、CMake 输出目录、ZIP 解压目录都在清除 Qt/QML 配置、PATH 仅保留 Windows 系统目录时，通过原生 Windows 插件接受真实卡密，退出码均为 0。
+- 证据保存在忽略的 `build/protected-windows-build.log`、`build/protected-integration.log`、`build/windows-deployment-results.json` 和 `build/protection/windows-x64/`；界面截图已遮蔽机器码和卡密。
+
+本轮 macOS 原生构建结果待 GitHub Actions 验证后记录。以下记录保留此前版本的验证历史；旧版 Mac 制品不能当作本轮 VM 保护版的验证结果。
+
 ## 开发环境
 
 - Windows x64；MSVC 2022 19.44，Windows SDK 10.0.26100。
@@ -21,7 +35,7 @@
 8. 客户端实际依赖许可收集：37 个包（35 个 registry 包、2 个工作区包），66 份第三方通知文本，清单 `complete: true`。工作区自身发布许可未指定。
 9. Qt 6.12.0 精确源码压缩包 URL 的只读 HEAD 请求返回 HTTP 200；没有下载整个源码包，也未将源码包作为本地发行物附送。完整许可文本与 Qt SPDX 已附在客户端目录，正式对外分发仍应核对源码提供义务。
 
-## 加壳结果
+## 早期 UPX 实验结果
 
 已下载官方 UPX 5.2.1，并按官方 GitHub 发布元数据提供的 SHA256 校验。实际尝试压缩 `CardGuard.exe` 与 `license-client.exe`，两个文件均被 UPX 拒绝：
 
@@ -29,7 +43,7 @@
 CantPackException: GUARD_CF enabled PE files are not supported
 ```
 
-没有使用 `--force` 关闭 CFG，也没有将结果标为“已加壳”。原始加固文件保留在 `dist/client`，每次测试的副本和报告保存在 `dist/packed-<时间>/packing-report.json`。此 demo 目前交付的是加固版本；商业保护壳、代码签名证书、在线授权/撤销服务和独立安全审计尚未实施。
+没有使用 `--force` 关闭 CFG，也没有将结果标为“已加壳”。每次实验的副本和报告保存在 `dist/packed-<时间>/packing-report.json`。当次交付的是编译加固版本；本轮已由上述 xollvm 策略虚拟化方案更新，UPX 不再作为主要保护。商业保护壳、代码签名证书、在线授权/撤销服务和独立安全审计尚未实施。
 
 界面截图位于 `build/gui-valid.png`、`build/gui-invalid.png`，可再次运行集成测试生成。测试卡密位于受限目录 `.local/demo-card.txt`，默认本机有效 24 小时。
 

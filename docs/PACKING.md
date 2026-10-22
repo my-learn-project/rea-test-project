@@ -1,46 +1,57 @@
-# 加壳与发布边界
+# 开源保护与发布边界
 
-本项目中的“加壳”限定为可选的 UPX 可执行文件压缩演示。UPX 官方明确说明它不提供保护或加密功能，因此不能把压缩后的 Demo 描述为“防破解”或“已达到顶尖安全”。[UPX 官方项目说明](https://github.com/upx/upx)
+默认构建使用 [xollvm v0.11.1 / LLVM 22](https://github.com/und3ath/xollvm/releases/tag/v0.11.1)，将单个授权策略函数 `cardguard_policy_allows` 转换为 VM 执行形式，再作为 object 链接进 Qt 主程序。Rust 验签库同样静态链接进主程序，GUI 不调用外部 `license-client`；该 CLI 保留为诊断和集成工具。
 
-## 允许处理的文件
+这项保护用于增加所选函数的分析、定位与修改成本。发卡私钥仍保留在管理端，可信时间与在线撤销仍需独立机制；保护不承诺无法破解。公开源码允许移除保护后重新构建，已经控制客户端的人仍可能补丁修改验签或结果分支。协议与密钥隔离的边界见 [SECURITY.md](SECURITY.md)。
 
-仅压缩客户端 Qt GUI 和 Rust 校验程序的副本。原始 Release 制品应保留，以便调试、比较和兼容性回退。不得扫描整个目录后对所有 EXE 或 DLL 批量处理，避免把管理端发卡程序或第三方运行库误纳入。
+## 保护范围
 
-以下内容不参与加壳，也不应因加壳而混入客户端安装包：
+受保护函数位于 `frontend/authorization_policy.cpp`，检查 Rust 校验成功、版本、产品、设备与字段结构对应的五个状态位（合计 `31`），以及签发时间、到期时间、时间上界和最长 366 天期限。GUI 的原有严格响应检查继续保留，最后还须通过该函数才能显示授权有效。当前 VM 注解关闭 anti-debug 相关选项。
 
-- 发卡工具、签名私钥、私钥口令、私钥备份和管理端数据。
-- Qt DLL、Qt 插件及其他第三方运行库；保持动态链接库可替换，并保留许可证信息。
-- 调试符号、构建缓存、源代码中的开发机绝对路径及其他仅开发时需要的文件。
+整个 Rust 校验器、Ed25519 实现、Qt DLL、framework、插件及其他第三方运行库均未被这次 VM 混淆。发卡工具、签名私钥、口令、备份和管理端数据不进入客户端发行包。Qt 动态库保持独立、可替换；保护工具不会替代通知、源码获取及适用的重链接等许可义务。[Qt 官方 LGPL 义务说明](https://www.qt.io/development/open-source-lgpl-obligations)
 
-Qt 的开源 LGPL 许可包含通知、源码获取及替换/重链接等义务，动态链接并不自动满足全部要求。发布时应核对实际使用模块的许可、附上库的许可证与对应源码或合规获取说明，并确保用户能使用修改后的 Qt 库。以上是项目工程约束，具体发行方式仍须按适用许可核对。[Qt 官方 LGPL 义务说明](https://www.qt.io/development/open-source-lgpl-obligations)
+## Windows 构建
 
-## 本地演示流程
-
-先按 README 构建并验证原始客户端，再使用项目提供的可选打包命令。启用 UPX 后，打包步骤应遵循下面的次序：
+在 README 所述开发环境安装完成后执行：
 
 ```powershell
-pwsh -File scripts/install-upx.ps1
-pwsh -File scripts/pack.ps1
+.\scripts\install-xollvm.ps1
+.\scripts\build.ps1
 ```
 
-脚本固定使用 UPX 5.2.1，在 `dist/packed-时间戳` 创建副本；只尝试处理 `CardGuard.exe` 和 `license-client.exe`，逐文件记录 `packing-report.json`。`packed: true` 表示压缩命令和 UPX 结构测试通过，`packed: false` 表示该文件未压缩并已从原始发行目录恢复。不要因为目录名含 `packed` 就认定加壳完成。
+工具安装完成后，后续构建直接运行 `build.ps1` 即可。
 
-若 UPX 拒绝启用 CFG（Control Flow Guard）的 PE 文件，项目保留原有缓解措施，不使用 `--force`，也不为压缩关闭 CFG。此时实际结果应报告“保留原始加固版本，UPX 压缩未完成”，以报告中的每个 EXE 结果为准。
+安装脚本使用固定的官方 Windows x64 LLVM 22 归档，核对 `config/xollvm-toolchain.json` 中锁定的版本与 SHA-256，再用 Clang 内置混淆模式编译探测函数，确认实际生成 VM。该路径不执行独立的 opt.exe；本机 opt.exe 被应用控制阻止，系统策略保持不变。构建脚本读取 `.tools/xollvm/toolchain.json`，自动生成 `build/protection/windows-x64` 下的策略 object 与保护报告；不需要手工给整个 Qt 工程切换混淆编译器。
 
-完整发布验证的建议步骤：
+`build-policy.py` 的流程是：先编译选定策略函数的 LLVM IR，执行 xollvm 转换，再进行 O2 优化与 IR 验证。它要求优化后仍存在 `vm.bytecode` 和 `__vm_engine`，Windows 还须保留 CFG 元数据，才从这份优化后 IR 生成最终 object。构建随后链接并运行使用同一 object 的 `policy-tests`，包含 4174 个边界、状态位组合与确定性差分用例；失败会终止构建。源码注解本身不能证明保护已执行，实际结果以构建输出和 [VALIDATION.md](VALIDATION.md) 为准。
 
-1. 创建客户端发行副本，只包含明确列入清单的 GUI、校验程序及其运行依赖。
-2. 对可兼容的 GUI 与校验程序执行 UPX 压缩，并执行 `upx --test`。拒绝处理时保留原文件。此测试检查压缩文件结构，不能证明业务或安全机制正确，也不单独证明 CFG 等缓解措施完整保留。
-3. 对压缩版本重新验证：合法卡密成功；篡改、过期、错误产品、错误设备和错误签名失败；程序启动、中文输入、错误反馈与超时处理正常。
-4. 对最终文件生成 SHA-256 清单，记录 Rust、Qt、编译器、依赖和 UPX 版本。校验和须通过可信渠道交付，单独附在同一可修改目录中不构成签名信任链。
-5. 若要正式签名，应先完成压缩再签名，并通过 `signtool verify /pa /v` 等工具验证签名。签名后再次压缩或改写文件通常会破坏现有签名。[Microsoft 签名验证说明](https://learn.microsoft.com/en-us/windows/win32/seccrypto/using-signtool-to-verify-a-file-signature)
+`protection.json` 记录工具版本、目标、保护范围、源码、object、优化后 IR 及工具报告摘要。它用于核对本次构建及发现陈旧或错架构对象，**不是运行时防篡改信任链**；文件与摘要一起可被修改时，摘要不能证明发布者身份。
 
-UPX 具有解压能力；把它当作秘密存储、隐藏算法或阻止程序分析的机制是不成立的。压缩后的文件还需要在目标 Windows 环境中进行兼容性测试。不要因为压缩或安全软件的判断而要求用户关闭安全防护。
+## macOS 构建
 
-Qt 运行依赖应由匹配版本的 `windeployqt` 收集，并在没有开发环境的 Windows 机器上验证。仍需检查 Rust 校验程序等额外组件与 Visual C++ 运行时；依赖收集不等于已经完成安装器与许可证合规。采用 Qt 官方部署工具的依据见 [Qt Windows 部署说明](https://doc.qt.io/qt-6/windows-deployment.html)。
+macOS CI 先由 Windows job 使用固定 xollvm 工具链生成 `macos-arm64` 和 `macos-x86_64` 两份 Mach-O 策略 object。对应 Mac job 下载同一次工作流的对象与 `protection.json`，用 `build-policy.py --verify-only` 核对源码摘要、目标、object 摘要及保护报告，再在原生 Apple Silicon 或 Intel runner 上链接 Rust、Qt 与策略 object，运行同一组策略测试和 GUI 集成测试。这个路径不要求在 Intel Mac 上用 Homebrew 安装 LLVM 或寻找不匹配的插件。
 
-## 商业保护工具
+手工构建时，将同一提交、对应架构的策略 object、`protection.json`、`xollvm-report.json` 放到 `build/protection/macos-<架构>`；也可用匹配的 LLVM 22 与 xollvm 插件通过 `build-policy.py` 自行生成。设置 `QT_ROOT` 后执行：
 
-VMProtect 等商业软件保护工具需要用户拥有对应许可证、下载渠道和适用版本；本 Demo 不预装盗版、不伪造商业加壳结果。取得许可后，应先明确保护范围与性能预算，再对合法授权、异常处理、更新、崩溃诊断、代码签名和 Qt 动态库替换能力做回归。版本与许可类型可参考 [VMProtect 官方购买说明](https://www.vmpsoft.com/vmprotect/purchase)。
+```bash
+export CARDGUARD_POLICY_DIR="$PWD/build/protection/macos-$(uname -m)"
+bash scripts/build-macos.sh
+```
 
-无论是否使用商业保护工具，授权私钥仍不得部署在客户端，客户端校验仍可能被补丁绕过。要提高实际授权安全性，应优先实施 [SECURITY.md](SECURITY.md) 中的在线激活、短期租约与服务端鉴权。
+`CARDGUARD_POLICY_DIR` 默认即为上述目录。两个架构分别构建和测试，不是 Universal 合包。CI 配置及验证命令不等于某次 Mac 构建已经成功，是否产出制品以对应工作流结果为准。
+
+## UPX：遗留可选压缩实验
+
+UPX 不属于默认保护步骤。既有 UPX 5.2.1 实验未成功压缩启用 CFG 的程序，保留了原始 EXE；不能把它描述为已经完成的主保护方案。默认使用 xollvm 的构建不需要安装或运行 UPX。
+
+需要重现该压缩实验时，可单独执行 `scripts/install-upx.ps1` 和 `scripts/pack.ps1`。后者在新目录对 GUI 与诊断 CLI 的副本尝试压缩，不处理 Qt DLL、插件或签发工具；逐文件结果记录在 `packing-report.json`，失败项恢复原始文件。不使用 `--force`，不为压缩关闭 CFG，也不要求关闭系统安全防护。
+
+`upx --test` 只检查压缩结构，不能证明授权逻辑、兼容性或系统缓解措施正确；若以后得到可用压缩版本，仍需重新运行最终制品的业务和安全回归。UPX 官方明确说明它不提供保护或加密功能。[UPX 官方项目说明](https://github.com/upx/upx)
+
+## 分发与签名
+
+Windows 的 `dist/CardGuard-windows-x64.zip` 包含完整 `client` 目录，部署依赖由匹配 Qt SDK 的 `windeployqt` 收集；保留 `qt.conf`、平台/样式插件和许可通知。Qt 替换方式见 [THIRD_PARTY.md](THIRD_PARTY.md)。Rust 已编译进 GUI，不再依赖诊断 CLI 的返回值。
+
+macOS 使用 `macdeployqt` 部署共享 Qt，保留 `.app` 的 framework 链接和签名。默认 ad-hoc 签名仅供本地演示；Developer ID 签名、Hardened Runtime 与 Apple 公证各有独立步骤，脚本不自动提交公证。
+
+正式签名应在代码变换、链接和可选压缩结束后进行；签名后修改文件会使签名失效。构建报告与同目录 SHA-256 清单只记录制品，不能代替操作系统代码签名或可信更新通道。[Microsoft 签名验证说明](https://learn.microsoft.com/en-us/windows/win32/seccrypto/using-signtool-to-verify-a-file-signature)、[Qt 官方 macOS 部署说明](https://doc.qt.io/qt-6/macos-deployment.html)

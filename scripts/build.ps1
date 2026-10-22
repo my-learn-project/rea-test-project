@@ -15,14 +15,28 @@ if (!$SkipTests) {
 }
 & cargo build --locked --release --workspace
 Assert-NativeExit 'Rust release build'
-& cmake -S . -B build/gui -G Ninja '-DCMAKE_BUILD_TYPE=Release' "-DCMAKE_PREFIX_PATH=$($DevEnvironment.qtRoot)"
+$toolManifest = Join-Path $ProjectRoot '.tools\xollvm\toolchain.json'
+if (!(Test-Path -LiteralPath $toolManifest)) { & (Join-Path $PSScriptRoot 'install-xollvm.ps1') }
+$protectionTools = Get-Content -LiteralPath $toolManifest -Raw | ConvertFrom-Json
+$policyDir = Join-Path $ProjectRoot 'build\protection\windows-x64'
+& $DevEnvironment.python (Join-Path $PSScriptRoot 'build-policy.py') --target windows-x64 --output $policyDir --clang $protectionTools.clang --opt $protectionTools.opt
+Assert-NativeExit 'Open-source policy virtualization'
+$metadata = (& cargo metadata --locked --offline --filter-platform x86_64-pc-windows-msvc --format-version 1 | ConvertFrom-Json)
+Assert-NativeExit 'Locked Rust dependency metadata'
+$windowsPackage = @($metadata.packages | Where-Object { $_.name -eq 'windows_x86_64_msvc' })
+if ($windowsPackage.Count -ne 1) { throw 'Expected exactly one locked Windows import package.' }
+$windowsImport = Join-Path (Split-Path $windowsPackage[0].manifest_path -Parent) 'lib\windows.0.52.0.lib'
+& cmake -S . -B build/gui -G Ninja '-DCMAKE_BUILD_TYPE=Release' "-DCMAKE_PREFIX_PATH=$($DevEnvironment.qtRoot)" "-DCARDGUARD_RUST_LIBRARY=$ProjectRoot/target/release/license_client.lib" "-DCARDGUARD_POLICY_OBJECT=$policyDir/authorization_policy.obj" "-DCARDGUARD_WINDOWS_IMPORT_LIBRARY=$windowsImport"
 Assert-NativeExit 'Qt CMake configure'
 & cmake --build build/gui
 Assert-NativeExit 'Qt build'
+& ctest --test-dir build/gui --output-on-failure -C Release
+Assert-NativeExit 'Virtualized authorization policy regression'
 $clientDir = Join-Path $ProjectRoot 'dist\client'
 New-Item -ItemType Directory -Force $clientDir | Out-Null
 Copy-Item -LiteralPath 'build\gui\CardGuard.exe' -Destination $clientDir -Force
 Copy-Item -LiteralPath 'target\release\license-client.exe' -Destination $clientDir -Force
+Copy-Item -LiteralPath (Join-Path $policyDir 'protection.json') -Destination $clientDir -Force
 foreach ($extra in @('generic','networkinformation','tls','imageformats','Qt6Network.dll')) {
     $candidate = [IO.Path]::GetFullPath((Join-Path $clientDir $extra))
     if (!$candidate.StartsWith($clientDir + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'Deployment cleanup path escaped client directory.' }
@@ -46,7 +60,7 @@ Assert-NativeExit 'Rust dependency notices'
 # Keep the CMake output usable when opened directly during development.
 # Reuse the deployed runtime without copying the full distribution or removing files.
 $guiDir = Join-Path $ProjectRoot 'build\gui'
-$requiredRuntimeFiles = @('Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'license-client.exe', 'qt.conf', 'platforms\qwindows.dll')
+$requiredRuntimeFiles = @('Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'qt.conf', 'platforms\qwindows.dll')
 $missingRuntimeFiles = @($requiredRuntimeFiles | Where-Object {
     !(Test-Path -LiteralPath (Join-Path $clientDir $_) -PathType Leaf)
 })

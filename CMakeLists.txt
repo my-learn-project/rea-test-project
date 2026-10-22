@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Concurrent)
 get_target_property(CARDGUARD_QT_CORE_TYPE Qt6::Core TYPE)
 if(CARDGUARD_QT_CORE_TYPE STREQUAL "STATIC_LIBRARY")
     message(FATAL_ERROR "CardGuard requires a shared Qt build. Use the dynamically linked Qt SDK.")
@@ -13,8 +13,43 @@ endif()
 qt_standard_project_setup()
 
 qt_add_executable(cardguard WIN32 frontend/main.cpp)
-target_link_libraries(cardguard PRIVATE Qt6::Widgets)
+target_link_libraries(cardguard PRIVATE Qt6::Widgets Qt6::Concurrent)
 set_target_properties(cardguard PROPERTIES OUTPUT_NAME "CardGuard")
+
+# The GUI calls the verifier in-process; a replaceable helper is not a trust boundary.
+set(CARDGUARD_RUST_LIBRARY "" CACHE FILEPATH "Absolute path to the Rust license_client static library")
+set(CARDGUARD_POLICY_OBJECT "" CACHE FILEPATH "Absolute path to the verified xollvm policy object")
+foreach(required_path CARDGUARD_RUST_LIBRARY CARDGUARD_POLICY_OBJECT)
+    if(NOT IS_ABSOLUTE "${${required_path}}" OR NOT EXISTS "${${required_path}}"
+       OR IS_DIRECTORY "${${required_path}}")
+        message(FATAL_ERROR "${required_path} must be an existing absolute file. Use the complete build script.")
+    endif()
+endforeach()
+add_library(cardguard_rust STATIC IMPORTED)
+set_target_properties(cardguard_rust PROPERTIES IMPORTED_LOCATION "${CARDGUARD_RUST_LIBRARY}")
+set_source_files_properties("${CARDGUARD_POLICY_OBJECT}" PROPERTIES EXTERNAL_OBJECT TRUE)
+target_sources(cardguard PRIVATE "${CARDGUARD_POLICY_OBJECT}")
+target_link_libraries(cardguard PRIVATE cardguard_rust)
+if(WIN32)
+    set(CARDGUARD_WINDOWS_IMPORT_LIBRARY "" CACHE FILEPATH "windows-targets import library used by Rust")
+    if(NOT EXISTS "${CARDGUARD_WINDOWS_IMPORT_LIBRARY}")
+        message(FATAL_ERROR "Provide CARDGUARD_WINDOWS_IMPORT_LIBRARY from the locked Cargo dependency.")
+    endif()
+    target_link_libraries(cardguard PRIVATE ws2_32 userenv bcrypt ntdll advapi32 dbghelp "${CARDGUARD_WINDOWS_IMPORT_LIBRARY}")
+elseif(APPLE)
+    target_link_libraries(cardguard PRIVATE "-framework Security" "-framework CoreFoundation" iconv resolv)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(policy-tests tests/authorization_policy_test.cpp "${CARDGUARD_POLICY_OBJECT}")
+    target_include_directories(policy-tests PRIVATE frontend)
+    if(MSVC)
+        target_compile_options(policy-tests PRIVATE /guard:cf /utf-8)
+        target_link_options(policy-tests PRIVATE /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA /guard:cf)
+    endif()
+    add_test(NAME virtualized-authorization-policy COMMAND policy-tests)
+endif()
 
 if(APPLE)
     set_target_properties(cardguard PROPERTIES
@@ -25,33 +60,6 @@ if(APPLE)
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/frontend/Info.plist.in"
     )
-endif()
-
-set(CARDGUARD_LICENSE_CLIENT "" CACHE FILEPATH "Optional absolute path to the built Rust license-client executable")
-if(CARDGUARD_LICENSE_CLIENT)
-    if(NOT IS_ABSOLUTE "${CARDGUARD_LICENSE_CLIENT}" OR NOT EXISTS "${CARDGUARD_LICENSE_CLIENT}"
-       OR IS_DIRECTORY "${CARDGUARD_LICENSE_CLIENT}")
-        message(FATAL_ERROR "CARDGUARD_LICENSE_CLIENT must point to an existing executable using an absolute path.")
-    endif()
-    if(WIN32)
-        set(CARDGUARD_CLIENT_FILE_NAME "license-client.exe")
-    else()
-        set(CARDGUARD_CLIENT_FILE_NAME "license-client")
-    endif()
-    get_filename_component(CARDGUARD_CLIENT_INPUT_NAME "${CARDGUARD_LICENSE_CLIENT}" NAME)
-    if(NOT CARDGUARD_CLIENT_INPUT_NAME STREQUAL CARDGUARD_CLIENT_FILE_NAME)
-        message(FATAL_ERROR "Only ${CARDGUARD_CLIENT_FILE_NAME} may be bundled with the verifier.")
-    endif()
-    add_custom_target(cardguard_verifier
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:cardguard>"
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CARDGUARD_LICENSE_CLIENT}"
-            "$<TARGET_FILE_DIR:cardguard>/${CARDGUARD_CLIENT_FILE_NAME}"
-        DEPENDS "${CARDGUARD_LICENSE_CLIENT}"
-        COMMENT "Copying Rust verifier beside the Qt executable"
-        VERBATIM
-    )
-    add_dependencies(cardguard cardguard_verifier)
 endif()
 
 if(MSVC)

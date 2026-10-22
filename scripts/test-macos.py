@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import platform
 import re
+import shlex
+import shutil
 import signal
 import struct
 import subprocess
@@ -205,6 +207,59 @@ def test_signed_token(suite: Suite, client: Path, gui: Path, temporary: Path, to
                 lambda: expect_rejection(client, {"op": "verify", "token": tampered}, "invalid_signature"))
     suite.check(label + "-authentic-native-gui", lambda: suite.screenshot(gui, label + "-valid", 0, valid_path))
     suite.check(label + "-tampered-native-gui", lambda: suite.screenshot(gui, label + "-tampered", 2, tampered_path))
+    suite.check(label + "-diagnostic-helper-independence",
+                lambda: test_helper_independence(suite, gui, temporary, valid_path, tampered_path, label))
+
+
+def sign_test_bundle(app: Path) -> None:
+    """Ad-hoc sign the disposable mutated bundle, leaving the formal bundle untouched."""
+    result = run_process(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", "--timestamp=none",
+                          "--options", "0", str(app)], timeout=60)
+    require(result.returncode == 0, "could not ad-hoc sign the disposable helper test bundle")
+    result = run_process(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)], timeout=30)
+    require(result.returncode == 0, "disposable helper test bundle signature verification failed")
+
+
+def test_helper_independence(suite: Suite, gui: Path, temporary: Path,
+                             valid_path: Path, tampered_path: Path, label: str) -> dict:
+    """Exercise real GUI outcomes with absent and executable forged diagnostic helpers."""
+    original_app = gui.parents[2]
+    fixture_root = temporary / (label + "-helper-boundary")
+    fixture_root.mkdir(mode=0o700)
+    copied_app = fixture_root / "CardGuard.app"
+    shutil.copytree(original_app, copied_app, symlinks=True)
+    for path in copied_app.rglob("*"):
+        if path.is_symlink():
+            require(path.resolve().is_relative_to(copied_app),
+                    "copied test bundle contains a link outside its own application")
+    copied_gui = copied_app / "Contents" / "MacOS" / "CardGuard"
+    copied_helper = copied_gui.with_name("license-client")
+    require(copied_helper.is_file() and not copied_helper.is_symlink(), "copied diagnostic helper is invalid")
+    copied_helper.unlink()
+    sign_test_bundle(copied_app)
+    missing_valid = suite.screenshot(copied_gui, label + "-helper-missing-valid", 0, valid_path)
+    missing_tampered = suite.screenshot(copied_gui, label + "-helper-missing-tampered", 2, tampered_path)
+
+    marker = fixture_root / "helper-invoked.marker"
+    forged_result = {"ok": True, "result": {
+        "device_id": "1" * 64, "license_id": "FORGED-TEST-FIXTURE", "subject": "Forged helper test fixture",
+        "issued_at": 1, "expires_at": 4102444800, "product": "card-demo", "version": 1}}
+    script = ("#!/bin/sh\numask 077\n: > " + shlex.quote(str(marker)) + "\n"
+              "while IFS= read -r request; do\n  printf '%s\\n' "
+              + shlex.quote(json.dumps(forged_result, separators=(",", ":"))) + "\ndone\n")
+    with copied_helper.open("x", encoding="utf-8") as target:
+        target.write(script)
+    copied_helper.chmod(0o700)
+    sign_test_bundle(copied_app)
+    # Verify that this is an executable, working forgery; a broken stub would prove nothing.
+    control = request(copied_helper, {"op": "verify", "token": "fixture-probe"})
+    require(control["ok"] is True and marker.is_file(), "forged helper control did not return success and record invocation")
+    marker.unlink()
+    forged_tampered = suite.screenshot(copied_gui, label + "-helper-forged-tampered", 2, tampered_path)
+    require(not marker.exists(), "GUI invoked the forged diagnostic helper")
+    return {"missing_helper_authentic": missing_valid, "missing_helper_tampered": missing_tampered,
+            "forged_helper_tampered": forged_tampered, "forged_helper_control_passed": True,
+            "forged_helper_invoked_by_gui": False, "test_bundle_signing": "ad-hoc-disposable-copy"}
 
 
 def run_suite(args, suite: Suite) -> None:
@@ -225,6 +280,10 @@ def run_suite(args, suite: Suite) -> None:
                     "device identifier has an invalid format")
             devices.append(device)
         require(devices[0] == devices[1], "device identifier was not stable across verifier processes")
+        gui_response = request(gui, {"op": "device"})
+        require(gui_response["ok"] is True and isinstance(gui_response.get("result"), dict)
+                and gui_response["result"].get("device_id") == devices[0],
+                "application diagnostic entry point did not match the standalone device identity")
 
     has_device = suite.check("device-format-and-stability", stable_device)
     for label, message in (

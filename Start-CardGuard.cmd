@@ -1,7 +1,7 @@
 @echo off
 setlocal
 set "CARDGUARD_DIR=%~dp0dist\client"
-for %%F in (CardGuard.exe license-client.exe Qt6Core.dll Qt6Gui.dll Qt6Widgets.dll qt.conf platforms\qwindows.dll) do (
+for %%F in (CardGuard.exe Qt6Core.dll Qt6Gui.dll Qt6Widgets.dll qt.conf platforms\qwindows.dll) do (
     if not exist "%CARDGUARD_DIR%\%%F" goto missing
 )
 start "CardGuard" /D "%CARDGUARD_DIR%" "%CARDGUARD_DIR%\CardGuard.exe"

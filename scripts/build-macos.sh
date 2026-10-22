@@ -51,10 +51,15 @@ fi
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
 cargo build --locked --release --workspace --target "$target"
 build_dir="$project_root/build/macos-$arch"
+policy_dir="${CARDGUARD_POLICY_DIR:-$project_root/build/protection/macos-$arch}"
+python3 scripts/build-policy.py --target "macos-$arch" --output "$policy_dir" --verify-only
 cmake -S . -B "$build_dir" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     "-DCMAKE_PREFIX_PATH=$qt_root" "-DCMAKE_OSX_ARCHITECTURES=$arch" \
-    "-DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" \
+    "-DCARDGUARD_RUST_LIBRARY=$project_root/target/$target/release/liblicense_client.a" \
+    "-DCARDGUARD_POLICY_OBJECT=$policy_dir/authorization_policy.o"
 cmake --build "$build_dir"
+ctest --test-dir "$build_dir" --output-on-failure
 
 mkdir -p "$project_root/dist"
 # Each build uses a new output directory, preserving earlier bundles.
@@ -65,6 +70,7 @@ cp "target/$target/release/license-client" "$app/Contents/MacOS/license-client"
 chmod 755 "$app/Contents/MacOS/license-client"
 license_dir="$app/Contents/Resources/licenses"
 mkdir -p "$license_dir"
+cp "$policy_dir/protection.json" "$app/Contents/Resources/protection.json"
 cp docs/THIRD_PARTY.md "$license_dir/"
 cp docs/licenses/* "$license_dir/"
 if [[ -d "$qt_root/licenses" ]]; then ditto "$qt_root/licenses" "$license_dir/qt"; fi

@@ -2,13 +2,13 @@
 [CmdletBinding()]
 param([string]$Subject = '本机演示授权', [ValidateRange(1,8760)][int]$ValidHours = 24, [string]$DeviceId)
 . (Join-Path $PSScriptRoot 'dev-env.ps1')
+. (Join-Path $PSScriptRoot 'client-protocol.ps1')
 Set-Location $ProjectRoot
 $privateKey = Join-Path $ProjectRoot '.local\demo.private.json'
 $passFile = Join-Path $ProjectRoot '.local\demo-passphrase.dpapi'
 if (!(Test-Path $privateKey) -or !(Test-Path $passFile)) { throw 'Run scripts/init-demo.ps1 first.' }
 if (!$DeviceId) {
-    $deviceResponse = '{"op":"device"}' | & .\target\release\license-client.exe --stdio | ConvertFrom-Json
-    Assert-NativeExit 'Read machine identifier'
+    $deviceResponse = Invoke-CardGuardProtocol -Executable (Join-Path $ProjectRoot 'dist\client\CardGuard.exe') -Request '{"op":"device"}'
     if (!$deviceResponse.ok) { throw $deviceResponse.error.message }
     $DeviceId = $deviceResponse.result.device_id
 }

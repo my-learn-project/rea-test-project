@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $clientDir = Join-Path $root 'dist\client'
 $exe = Join-Path $clientDir 'CardGuard.exe'
-$requiredFiles = @('CardGuard.exe', 'license-client.exe', 'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'qt.conf', 'platforms\qwindows.dll')
+$requiredFiles = @('CardGuard.exe', 'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'qt.conf', 'platforms\qwindows.dll')
 $missingFiles = @($requiredFiles | Where-Object {
     !(Test-Path -LiteralPath (Join-Path $clientDir $_) -PathType Leaf)
 })

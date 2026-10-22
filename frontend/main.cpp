@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFutureWatcher>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QJsonDocument>
@@ -17,7 +18,6 @@
 #include <QMainWindow>
 #include <QPlainTextEdit>
 #include <QPixmap>
-#include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QShortcut>
@@ -25,13 +25,59 @@
 #include <QStatusBar>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrentRun>
 
+#include "authorization_policy.h"
+#include "cardguard_ffi.h"
+
+#include <array>
+#include <atomic>
 #include <cmath>
+#include <cstring>
+#include <memory>
+#include <utility>
 
 namespace {
 constexpr qsizetype MaxTokenBytes = 4096;
+constexpr qsizetype MaxRequestBytes = 16 * 1024;
 constexpr qsizetype MaxResponseBytes = 64 * 1024;
 constexpr int RequestTimeoutMs = 8000;
+
+std::atomic<bool> verifierTaskRunning{false};
+
+// The worker owns this reservation even if its window has already been destroyed.
+class VerifierReservation final
+{
+public:
+    VerifierReservation()
+    {
+        bool expected = false;
+        acquired_ = verifierTaskRunning.compare_exchange_strong(expected, true);
+    }
+
+    ~VerifierReservation()
+    {
+        if (acquired_)
+            verifierTaskRunning.store(false);
+    }
+
+    bool acquired() const { return acquired_; }
+
+private:
+    bool acquired_ = false;
+};
+
+QByteArray requestFromRust(const QByteArray &request)
+{
+    std::array<uint8_t, static_cast<size_t>(MaxResponseBytes)> output{};
+    const size_t written = cardguard_request(
+        reinterpret_cast<const uint8_t *>(request.constData()),
+        static_cast<size_t>(request.size()), output.data(), output.size());
+    if (written == 0 || written > output.size())
+        return {};
+    return QByteArray(reinterpret_cast<const char *>(output.data()),
+                      static_cast<qsizetype>(written));
+}
 
 QLabel *label(const QString &text, const QString &objectName = {})
 {
@@ -95,7 +141,7 @@ public:
         token_->setMinimumHeight(100);
         token_->setMaximumHeight(120);
         tokenLayout->addWidget(token_);
-        inputHint_ = label(QStringLiteral("卡密仅通过本机进程校验，不写入日志或配置。"));
+        inputHint_ = label(QStringLiteral("卡密仅在本机校验，不写入日志或配置。"));
         inputHint_->setWordWrap(true);
         tokenLayout->addWidget(inputHint_);
         auto *tokenActions = new QHBoxLayout;
@@ -148,7 +194,7 @@ public:
                       QStringLiteral("卡密已更改，请点击验证授权。"));
             const bool tooLong = token_->toPlainText().toUtf8().size() > MaxTokenBytes;
             inputHint_->setText(tooLong ? QStringLiteral("卡密超出 4096 字节限制，请检查粘贴内容。")
-                                       : QStringLiteral("卡密仅通过本机进程校验，不写入日志或配置。"));
+                                       : QStringLiteral("卡密仅在本机校验，不写入日志或配置。"));
             updateControls();
         });
         connect(verify_, &QPushButton::clicked, this, [this] { verifyLicense(); });
@@ -159,7 +205,8 @@ public:
         });
         timeout_.setSingleShot(true);
         connect(&timeout_, &QTimer::timeout, this, [this] {
-            finishFailure(QStringLiteral("校验进程响应超时"), QStringLiteral("请确认本机校验组件正常，然后重试。"));
+            if (request_ != Request::None)
+                finishFailure(QStringLiteral("授权校验超时"), QStringLiteral("本次结果已作废，正在等待后台任务结束；任务结束后可重试。"));
         });
         expiryTimer_.setInterval(1000);
         connect(&expiryTimer_, &QTimer::timeout, this, [this] {
@@ -178,10 +225,12 @@ public:
 
     ~MainWindow() override
     {
-        if (process_ && process_->state() != QProcess::NotRunning) {
-            process_->kill();
-            process_->waitForFinished(500);
-        }
+        timeout_.stop();
+        ++requestGeneration_;
+        if (watcher_)
+            watcher_->disconnect(this);
+        // QFutureWatcher destruction does not cancel the call. The worker captures
+        // only owned buffers/reservation, and never reads this window or its widgets.
     }
 
 private:
@@ -197,7 +246,7 @@ private:
 
     void updateControls()
     {
-        const bool idle = request_ == Request::None;
+        const bool idle = request_ == Request::None && watcher_ == nullptr;
         const QByteArray bytes = token_->toPlainText().trimmed().toUtf8();
         verify_->setEnabled(idle && !device_->text().isEmpty() && !bytes.isEmpty()
                             && bytes.size() <= MaxTokenBytes);
@@ -236,7 +285,7 @@ private:
 
     void requestDevice()
     {
-        if (request_ != Request::None)
+        if (request_ != Request::None || watcher_ != nullptr)
             return;
         resetLicense();
         device_->clear();
@@ -261,95 +310,72 @@ private:
 
     void startRequest(Request kind, const QJsonObject &payload)
     {
-        request_ = kind;
-        stdout_.clear();
-        stderrBytes_ = 0;
-        updateControls();
-#ifdef Q_OS_WIN
-        const QString executable = QStringLiteral("license-client.exe");
-#else
-        const QString executable = QStringLiteral("license-client");
-#endif
-        // On macOS this is CardGuard.app/Contents/MacOS, also containing the verifier.
-        const QString path = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(executable);
-        if (!QFileInfo(path).isFile()) {
-            finishFailure(QStringLiteral("找不到校验组件"), QStringLiteral("请将 license-client 与 CardGuard 放在同一目录，再重新读取机器码。"));
+        if (request_ != Request::None || watcher_ != nullptr)
+            return;
+        QByteArray encoded = QJsonDocument(payload).toJson(QJsonDocument::Compact);
+        if (encoded.isEmpty() || encoded.size() > MaxRequestBytes) {
+            finishResponseFailure(kind, QStringLiteral("校验请求无效"), QStringLiteral("请求内容超出安全限制，授权未通过。"));
             return;
         }
-        auto *process = new QProcess(this);
-        process_ = process;
-        process->setProgram(path);
-        process->setArguments({QStringLiteral("--stdio")});
-        process->setWorkingDirectory(QCoreApplication::applicationDirPath());
-        process->setProcessChannelMode(QProcess::SeparateChannels);
-        connect(process, &QProcess::started, this, [this, process, payload] {
-            if (process != process_)
+        auto reservation = std::make_shared<VerifierReservation>();
+        if (!reservation->acquired()) {
+            finishResponseFailure(kind, QStringLiteral("后台校验仍在运行"), QStringLiteral("请等待当前任务结束后重新读取设备身份。"));
+            return;
+        }
+        request_ = kind;
+        const quint64 generation = ++requestGeneration_;
+        auto *watcher = new QFutureWatcher<QByteArray>(this);
+        watcher_ = watcher;
+        updateControls();
+        connect(watcher, &QFutureWatcher<QByteArray>::finished, this,
+                [this, watcher, generation, kind] {
+            if (watcher != watcher_)
                 return;
-            process->write(QJsonDocument(payload).toJson(QJsonDocument::Compact) + '\n');
-            process->closeWriteChannel();
-        });
-        connect(process, &QProcess::readyReadStandardOutput, this, [this, process] {
-            if (process != process_)
+            const QFuture<QByteArray> completed = watcher->future();
+            watcher_ = nullptr;
+            watcher->deleteLater();
+            timeout_.stop();
+            request_ = Request::None;
+            updateControls();
+            // A timeout invalidates this generation, but keeps the single worker
+            // occupied until it actually finishes. Its late result never grants access.
+            if (generation != requestGeneration_)
                 return;
-            stdout_.append(process->readAllStandardOutput());
-            if (stdout_.size() > MaxResponseBytes)
-                finishFailure(QStringLiteral("校验组件响应异常"), QStringLiteral("响应内容超出安全限制，授权未通过。"));
-        });
-        connect(process, &QProcess::readyReadStandardError, this, [this, process] {
-            if (process != process_)
-                return;
-            stderrBytes_ += process->readAllStandardError().size();
-            if (stderrBytes_ > MaxResponseBytes)
-                finishFailure(QStringLiteral("校验组件响应异常"), QStringLiteral("组件错误输出超出安全限制，授权未通过。"));
-        });
-        connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
-            if (process == process_ && error == QProcess::FailedToStart)
-                finishFailure(QStringLiteral("无法启动校验组件"), QStringLiteral("请检查组件文件与运行依赖是否完整。"));
-        });
-        connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
-                [this, process](int code, QProcess::ExitStatus exitStatus) {
-            if (process != process_)
-                return;
-            stdout_.append(process->readAllStandardOutput());
-            const Request kind = request_;
-            const QByteArray response = stdout_;
-            releaseProcess();
-            if (exitStatus != QProcess::NormalExit || code != 0) {
-                finishResponseFailure(kind, QStringLiteral("校验组件执行失败"), QStringLiteral("组件未能正常完成校验，请重试。"));
+            QByteArray response;
+            try {
+                response = completed.result();
+            } catch (...) {
+                finishResponseFailure(kind, QStringLiteral("授权校验执行失败"), QStringLiteral("校验未能正常完成，请重试。"));
                 return;
             }
-            if (response.size() > MaxResponseBytes) {
-                finishResponseFailure(kind, QStringLiteral("校验组件响应异常"), QStringLiteral("响应内容超出安全限制。"));
+            if (response.isEmpty() || response.size() > MaxResponseBytes) {
+                finishResponseFailure(kind, QStringLiteral("校验结果异常"), QStringLiteral("本机校验返回了无效数据，授权未通过。"));
                 return;
             }
             handleResponse(kind, response);
         });
         timeout_.start(RequestTimeoutMs);
-        process->start(QIODevice::ReadWrite);
-    }
-
-    void releaseProcess()
-    {
-        timeout_.stop();
-        if (process_) {
-            QProcess *process = process_;
-            process_ = nullptr;
-            process->disconnect(this);
-            if (process->state() != QProcess::NotRunning) {
-                connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), process, &QObject::deleteLater);
-                process->kill();
-            } else {
-                process->deleteLater();
-            }
+        try {
+            watcher->setFuture(QtConcurrent::run(
+                [encoded = std::move(encoded), reservation = std::move(reservation)]() mutable {
+                    // Release before Qt reports completion, including exception unwinding.
+                    [[maybe_unused]] auto running = std::move(reservation);
+                    return requestFromRust(encoded);
+                }));
+        } catch (...) {
+            watcher_ = nullptr;
+            watcher->disconnect(this);
+            watcher->deleteLater();
+            finishFailure(QStringLiteral("无法启动授权校验"), QStringLiteral("后台任务未能启动，授权未通过。"));
         }
-        request_ = Request::None;
-        updateControls();
     }
 
     void finishFailure(const QString &title, const QString &description)
     {
         const Request kind = request_;
-        releaseProcess();
+        ++requestGeneration_;
+        timeout_.stop();
+        request_ = Request::None;
         finishResponseFailure(kind, title, description);
     }
 
@@ -420,6 +446,17 @@ private:
             finishResponseFailure(kind, QStringLiteral("授权期限无效"), QStringLiteral("授权尚未生效或已经过期。"));
             return;
         }
+        const uint32_t checks =
+            (object.value(QStringLiteral("ok")).toBool() ? CARDGUARD_CHECK_RUST_VALID : 0u)
+            | (result.value(QStringLiteral("version")).toInt(-1) == 1 ? CARDGUARD_CHECK_VERSION : 0u)
+            | (result.value(QStringLiteral("product")).toString() == QStringLiteral("card-demo") ? CARDGUARD_CHECK_PRODUCT : 0u)
+            | (deviceId == device_->text() ? CARDGUARD_CHECK_DEVICE : 0u)
+            | CARDGUARD_CHECK_FIELDS; // All required fields/types passed the checks above.
+        if (cardguard_policy_allows(checks, static_cast<uint64_t>(issuedAt),
+                                   static_cast<uint64_t>(expiresAt), static_cast<uint64_t>(now)) != 1) {
+            finishResponseFailure(kind, QStringLiteral("授权策略校验未通过"), QStringLiteral("授权范围或有效期限不符合当前产品要求。"));
+            return;
+        }
         verifiedExpiry_ = expiresAt;
         verifiedIssuedAt_ = issuedAt;
         verifiedRemainingMs_ = (expiresAt - now) * 1000;
@@ -466,11 +503,10 @@ private:
     QString smokeToken_;
     QString screenshotPath_;
     Request request_ = Request::None;
-    QProcess *process_ = nullptr;
+    QFutureWatcher<QByteArray> *watcher_ = nullptr;
+    quint64 requestGeneration_ = 0;
     QTimer timeout_;
     QTimer expiryTimer_;
-    QByteArray stdout_;
-    qsizetype stderrBytes_ = 0;
     qint64 verifiedExpiry_ = 0;
     qint64 verifiedIssuedAt_ = 0;
     qint64 verifiedRemainingMs_ = 0;
@@ -494,6 +530,9 @@ private:
 
 int main(int argc, char *argv[])
 {
+    if (argc == 2 && std::strcmp(argv[1], "--stdio") == 0)
+        return cardguard_run_stdio();
+
     bool smokeTest = false;
     for (int i = 1; i < argc; ++i)
         smokeTest = smokeTest || QByteArray(argv[i]) == "--smoke-test";

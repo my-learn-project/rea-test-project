@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[lib]
+crate-type = ["rlib", "staticlib"]
+
 [dependencies]
 license-core = { path = "../license-core" }
 serde.workspace = true
@@ -14,5 +17,6 @@ sha2.workspace = true
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 
-[lints]
-workspace = true
+[lints.rust]
+# Only src/ffi.rs opts out for its documented raw-pointer boundary.
+unsafe_code = "deny"

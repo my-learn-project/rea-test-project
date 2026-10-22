@@ -1,4 +1,5 @@
 //! Local device identity. Neither the protocol nor environment can supply a device ID.
+#![forbid(unsafe_code)]
 
 #[cfg(any(windows, test))]
 const WINDOWS_DEVICE_DOMAIN: &[u8] = b"card-demo/device/v1\0";
