@@ -226,6 +226,8 @@ def test_helper_independence(suite: Suite, gui: Path, temporary: Path,
     original_app = gui.parents[2]
     fixture_root = temporary / (label + "-helper-boundary")
     fixture_root.mkdir(mode=0o700)
+    # macOS /var aliases /private/var; compare canonical paths on both sides.
+    fixture_root = fixture_root.resolve()
     copied_app = fixture_root / "CardGuard.app"
     shutil.copytree(original_app, copied_app, symlinks=True)
     for path in copied_app.rglob("*"):
