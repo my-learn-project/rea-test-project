@@ -1,0 +1,4 @@
+# Run the independent issuer keygen command to generate your own keypair.
+# This is a FORMAT EXAMPLE, not an operational trusted key. Never publish the private key.
+# config/trusted-public-key.hex must contain exactly 64 lowercase hexadecimal characters.
+# Generate that file BEFORE compiling license-client; no default signing key is supplied.

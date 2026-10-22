@@ -1,0 +1,11 @@
+/.tools/
+/.local/
+/target/
+/build/
+/dist/
+/config/trusted-public-key.hex
+*.private.json
+*.key
+*.pdb
+__pycache__/
+*.log

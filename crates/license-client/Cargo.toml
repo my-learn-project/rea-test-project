@@ -1,0 +1,18 @@
+[package]
+name = "license-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+license-core = { path = "../license-core" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+[lints]
+workspace = true
