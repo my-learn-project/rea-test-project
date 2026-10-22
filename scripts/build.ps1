@@ -42,5 +42,53 @@ $qtLicenseSource = Join-Path $DevEnvironment.qtRoot 'licenses'
 if (Test-Path $qtLicenseSource) { Copy-Item -Path "$qtLicenseSource\*" -Destination $licenseDir -Recurse -Force }
 & $DevEnvironment.python (Join-Path $PSScriptRoot 'collect-notices.py')
 Assert-NativeExit 'Rust dependency notices'
+
+# Keep the CMake output usable when opened directly during development.
+# Reuse the deployed runtime without copying the full distribution or removing files.
+$guiDir = Join-Path $ProjectRoot 'build\gui'
+$requiredRuntimeFiles = @('Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'license-client.exe', 'qt.conf', 'platforms\qwindows.dll')
+$missingRuntimeFiles = @($requiredRuntimeFiles | Where-Object {
+    !(Test-Path -LiteralPath (Join-Path $clientDir $_) -PathType Leaf)
+})
+if ($missingRuntimeFiles.Count -gt 0) {
+    throw "Qt 运行依赖部署不完整，无法同步开发运行目录：$($missingRuntimeFiles -join ', ')。请检查 Qt SDK 并重新运行 scripts/build.ps1。"
+}
+Get-ChildItem -LiteralPath $clientDir -File -Filter '*.dll' | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination $guiDir -Force
+}
+Copy-Item -LiteralPath (Join-Path $clientDir 'qt.conf'), (Join-Path $clientDir 'license-client.exe') -Destination $guiDir -Force
+foreach ($pluginType in @('platforms', 'styles')) {
+    $pluginSource = Join-Path $clientDir $pluginType
+    if (Test-Path -LiteralPath $pluginSource -PathType Container) {
+        $pluginDestination = Join-Path $guiDir $pluginType
+        New-Item -ItemType Directory -Force $pluginDestination | Out-Null
+        Get-ChildItem -LiteralPath $pluginSource -Force | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $pluginDestination -Recurse -Force
+        }
+    }
+}
+$runNotes = @'
+CardGuard 开发运行目录
+
+此目录中的 CardGuard.exe 可在构建完成后直接双击运行。
+build.ps1 会同步 Qt DLL、平台/样式插件、qt.conf 和最新 license-client.exe。
+
+推荐使用项目 dist\client\CardGuard.exe；dist\client 是包含第三方许可通知的完整客户端目录。
+开发输出目录 build\gui 仅同步本机运行所需文件，不包含完整包的 licenses 或运行时安装程序。
+
+如果提示缺少 Qt6Core.dll 等文件，请在项目根目录执行：
+  pwsh -File .\scripts\build.ps1
+
+移动程序时请复制完整 dist\client 目录，保留其 DLL 和插件子目录结构。
+'@
+[IO.File]::WriteAllText((Join-Path $guiDir 'README-运行说明.txt'), $runNotes, [Text.UTF8Encoding]::new($true))
+$archivePath = Join-Path $ProjectRoot 'dist\CardGuard-windows-x64.zip'
+$unexpectedFiles = Get-ChildItem -LiteralPath $clientDir -Recurse -File | Where-Object {
+    $_.Name -match 'issuer|private|passphrase|demo-card|invalid-card|\.dpapi$|\.pfx$|\.p12$|\.key$'
+}
+if ($unexpectedFiles) { throw 'Unexpected signing material or issuer found in client distribution. Inspect it before creating the ZIP.' }
+Compress-Archive -LiteralPath $clientDir -DestinationPath $archivePath -Force
 Write-Host "Built client: $clientDir\CardGuard.exe"
+Write-Host "Development executable is also ready: $guiDir\CardGuard.exe"
+Write-Host "Distribution archive: $archivePath"
 Write-Host 'Issuer and private keys remain in the development workspace.'

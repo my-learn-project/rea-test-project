@@ -54,3 +54,14 @@ CantPackException: GUARD_CF enabled PE files are not supported
 | `CardGuard-macos-x86_64.zip` | `6c1d4fe08b15ce7e85e9dfb1db0629d3fba44c90b5c1eb6d1f210d54b2a4ff89` |
 
 当前 Mac 包为 **ad-hoc 签名演示版本**，未使用 Apple Developer ID，也未公证。签名结构校验通过不代表 Gatekeeper 信任或 Apple 安全认证；没有为打包关闭系统安全保护。
+
+## Windows 直接启动与源码分支修复
+
+2026-10-22 修复 `build/gui/CardGuard.exe` 直接打开时缺少 `Qt6Core.dll` 的问题。完整构建现将 Qt DLL、平台/样式插件、`qt.conf` 和最新 Rust 校验器同步到该目录，同时生成包含完整 `client/` 目录的 `dist/CardGuard-windows-x64.zip`。项目根目录新增 `Start-CardGuard.cmd`，检查必要文件后启动完整客户端；PowerShell 启动脚本也不再依赖 MSVC 开发环境。
+
+- 重新完成 Windows Release 构建与 22 项集成检查。
+- 原生 Windows 平台插件分别测试 `dist/client`、`build/gui`、ZIP 解压目录；子进程 PATH 仅保留 Windows 系统目录，并移除继承的 Qt/QML 路径。三个目录均成功启动、通过 Rust IPC 读取机器码并接受真实卡密，退出码均为 0。
+- ZIP 的全部 84 个文件逐一与分发目录比较 SHA256，内容一致；未包含签发工具或签名秘密。
+- 本轮部署验证结果与遮蔽敏感信息后的截图保存在忽略的 `build/windows-deployment-results.json`、`build/deployment-*.png`。
+- 根目录启动入口也在清除 Qt SDK 路径后实测成功，启动的原生窗口正常响应。
+- 完整源码已合入 `main`；通过 `git check-ignore --no-index` 检查 40 个项目文件路径均未被忽略，10 个本机工具、生成物和敏感文件样例均被忽略。GitHub Desktop 的“0 changed files”表示没有未提交修改，不表示源码缺失。

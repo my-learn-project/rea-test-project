@@ -8,6 +8,8 @@ Windows x64 与 macOS（Apple Silicon / Intel）桌面软件授权示例：Qt 6 
 
 ## 快速使用
 
+已有构建时，双击项目根目录的 **`Start-CardGuard.cmd`** 即可启动。它会检查必需的 Qt DLL 和校验器，并从 `dist/client` 运行完整程序，不需要先导入 Rust、Qt 或 MSVC 开发环境。
+
 在项目目录使用 **PowerShell 7.2+**：
 
 ```powershell
@@ -22,13 +24,23 @@ Windows x64 与 macOS（Apple Silicon / Intel）桌面软件授权示例：Qt 6 
 .\scripts\run-demo.ps1
 ```
 
-直接运行 `dist/client/CardGuard.exe` 也可以。复制整个 `dist/client` 目录给测试机器；授权需要使用目标机器显示的机器码重新签发：
+直接运行 `dist/client/CardGuard.exe` 也可以。分发时使用构建生成的 **`dist/CardGuard-windows-x64.zip`**：完整解压后运行其中的 `client/CardGuard.exe`；也可复制整个 `dist/client` 目录。EXE 依赖同目录的 Qt DLL、Rust 校验器及 `platforms` 插件目录，单独复制 EXE 会报缺少 `Qt6Core.dll`。测试机器若缺少 MSVC 运行库，可使用包内微软官方 `vc_redist.x64.exe` 安装。
+
+`build/gui` 是 CMake 构建目录；`scripts/build.ps1` 现在也会向该目录同步运行依赖，便于直接测试。只执行 CMake 编译时，请继续使用完整的构建脚本完成部署。
+
+授权需要使用目标机器显示的机器码重新签发：
 
 ```powershell
 .\scripts\issue-demo.ps1 -Subject '测试用户' -DeviceId '<64位小写十六进制机器码>' -ValidHours 24
 ```
 
 机器码来自 Windows MachineGuid 或 macOS IOPlatformUUID 的带产品域哈希，仅用于 demo 设备绑定；它不是硬件防伪证明。复制 Mac 界面上的机器码，也可用上面的 Windows 发卡命令签发。
+
+## 源码与 Git 分支
+
+完整项目已整合到 `main`，Qt 源码位于 `frontend/`，Rust 源码位于 `crates/`。`.gitignore` 忽略的是工具链、构建产物、缓存和本机发行身份，源码、`Cargo.lock`、构建脚本及 `.github/workflows/` 都应被跟踪。
+
+GitHub Desktop 的“0 changed files”表示没有待提交修改；已提交的源码可在 **History**、**Show in Explorer** 或 GitHub 仓库文件页查看。
 
 ## macOS 构建
 
