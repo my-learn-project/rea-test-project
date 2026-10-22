@@ -6,6 +6,8 @@ Windows x64 与 macOS（Apple Silicon / Intel）桌面软件授权示例：Qt 6 
 
 默认保护采用开源 xollvm v0.11.1 / LLVM 22，仅虚拟化最终授权策略函数；没有混淆整个 Rust 验签器或 Qt 库。客户端只含公钥，发行私钥、口令和发行工具不进入 `dist/client`。保护用于提高所选代码的分析和修改成本，不能阻止有源码的人移除保护重新构建，也不能代替密钥隔离、可信时间或服务端鉴权。详见 [安全设计](docs/SECURITY.md) 和 [开源保护说明](docs/PACKING.md)。
 
+仓库提供一套可直接测试的[公开 demo 身份](demo/keys/README.md)：加密私钥、配套公钥和明文测试口令均已公开，任何人都能签发这套身份的测试卡密。它只用于复现演示；正式授权须另外生成和保管独立私钥。
+
 ## 快速使用
 
 已有构建时，双击项目根目录的 **`Start-CardGuard.cmd`** 即可启动。它会检查必需的 Qt DLL 和平台插件，并从 `dist/client` 运行完整程序，不需要先导入 Rust、Qt 或 MSVC 开发环境。Rust 校验代码已经编译进 GUI；主程序也提供不创建窗口的 `--stdio` 诊断入口，Windows 发卡和测试脚本使用该入口。外部 `license-client.exe` 为同源可选工具，GUI 不调用它。
@@ -42,30 +44,65 @@ Windows x64 与 macOS（Apple Silicon / Intel）桌面软件授权示例：Qt 6 
 
 完整项目已整合到 `main`，Qt 源码位于 `frontend/`，Rust 源码位于 `crates/`。`.gitignore` 忽略的是工具链、构建产物、缓存和本机发行身份，源码、`Cargo.lock`、构建脚本及 `.github/workflows/` 都应被跟踪。
 
+`demo/keys` 中三份刻意公开的测试身份文件是明确的跟踪例外；Windows `.local` 与 DPAPI 材料仍被忽略。
+
 GitHub Desktop 的“0 changed files”表示没有待提交修改；已提交的源码可在 **History**、**Show in Explorer** 或 GitHub 仓库文件页查看。
 
 ## macOS 构建
 
-GitHub Actions 工作流 [Build macOS](.github/workflows/build-macos.yml) 在推送 `main` 或 `codex/**` 分支的相关代码后，先由 Windows job 使用固定 xollvm 工具链生成两架构的 Mach-O 策略 object，再由原生 Apple Silicon 和 Intel runner 核对、链接和测试。Mac job 无需在 Intel Homebrew 环境安装 LLVM。仓库变量 `CARDGUARD_PUBLIC_KEY_HEX` 必须设置为当前 `config/trusted-public-key.hex` 的 64 位公钥；正在使用的 `.local` 身份与 DPAPI 文件留在本机，公开的加密演示快照见下文。
+GitHub Actions 工作流 [Build macOS](.github/workflows/build-macos.yml) 在推送 `main` 或 `codex/**` 分支的相关代码后，先由 Windows job 使用固定 xollvm 工具链生成两架构的 Mach-O 策略 object，再由原生 Apple Silicon 和 Intel runner 核对、链接和测试。Mac job 无需在 Intel Homebrew 环境安装 LLVM。CI 默认读取 `demo/keys/demo.public.hex`；仓库变量 `CARDGUARD_PUBLIC_KEY_HEX` 可覆盖最终客户端的 64 位验签公钥，使用覆盖值时需配套使用对应签发身份。
 
 成功运行的 Artifacts 中有 `CardGuard-macos-arm64`、`CardGuard-macos-x86_64` 两个下载项。各自包含 `.app` 的 ZIP 和 SHA256 文件；下载后解开外层 Actions ZIP，再在 Mac 上解开内层程序 ZIP，保留执行权限、framework 链接和签名。两个版本分别适用于 Apple Silicon 和 Intel；并非 Universal 二合一包。
 
-工作流配置为先用临时测试身份验证真实发卡、验签、篡改、错误设备和原生 Cocoa 界面，再恢复项目公钥重新构建最终客户端。上传的客户端只来自最后一次构建；测试私钥、口令和测试版程序均不上传。GUI 测试截图会遮蔽机器码和卡密。配置了这些检查不等于某次构建已经通过，请以 Actions 结果和 [验证记录](docs/VALIDATION.md) 为准。
+工作流先用一次性临时身份进行真实发卡、验签、篡改、错误设备和原生 Cocoa 测试，再恢复最终公钥并重新构建。若最终公钥与 `demo.public.hex` 相同，则用 `issue-demo.py` 给最终 `.app` 签卡，再运行 `test-macos.py` 回归，最后上传最终客户端。覆盖为其他公钥时，公开 demo 身份不能签出该客户端信任的卡密。临时身份的私钥、口令和测试版程序不作为客户端制品上传；公开 demo 材料保留在源码测试目录，GUI 测试截图仍会遮蔽机器码和卡密。配置了这些检查不等于某次构建已经通过，请以 Actions 结果和 [验证记录](docs/VALIDATION.md) 为准。
 
-也可在安装 Xcode Command Line Tools、Rust 1.98.0、CMake、Ninja、Python 3.10+ 和 Qt 6 共享 SDK 的 Mac 上执行：
+在 Mac 克隆仓库并进入项目根目录后，使用 Python 3.10+ 先准备公开 demo 的信任公钥：
 
 ```bash
-# 先复制现有发行身份的公钥到 config/trusted-public-key.hex
+python3 scripts/prepare-demo.py
+```
+
+脚本仅在 `config/trusted-public-key.hex` 缺失时复制公开 demo 公钥；已有不同公钥时会报错并保留原文件，不会覆盖已有身份，也不会修改 Windows 的 `.local` 或 DPAPI 文件。
+
+构建需要 Python 3.10+、Xcode Command Line Tools、Rust 1.98.0、CMake、Ninja 和 Qt 6.12.0 **共享 SDK**。Xcode Command Line Tools 可通过 `xcode-select --install` 安装；已有 rustup 时可运行：
+
+```bash
+rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+```
+
+准备好这些工具及 GitHub CLI `gh` 后，从本仓库选择一次与当前策略源码匹配的工作流运行，下载 `virtualized-policies`。把下列占位符替换为实际 run ID；它指该次运行，不表示旧制品始终是最新版本：
+
+GitHub CLI 下载 Actions artifact 可能需要先执行 `gh auth login`；公开仓库也不保证可以匿名下载。
+
+```bash
+gh run download '<本仓库run-id>' --repo my-learn-project/rea-test-project \
+  --name virtualized-policies --dir build/protection
+
 export QT_ROOT="$HOME/Qt/6.12.0/macos"
-# 将同提交、对应架构的 authorization_policy.o、protection.json、xollvm-report.json
-# 从 CI 放入下述目录，或使用匹配 LLVM 22 + xollvm 插件自行生成：
 export CARDGUARD_POLICY_DIR="$PWD/build/protection/macos-$(uname -m)"
 bash scripts/build-macos.sh
 ```
 
-脚本默认构建本机架构，核对策略 object 的源码、目标与文件摘要，再运行链接同一对象的策略测试；产物在 `dist/macos-<架构>-<随机后缀>/`。Rust 验签库与保护后的策略 object 链接进 `CardGuard.app` 内的 GUI，另保留同源诊断 CLI；程序使用 macOS 默认 Qt 样式。macOS 打包采用 `macdeployqt`，不使用 UPX。
+artifact 内包括两架构的 `authorization_policy.o`、`protection.json`、`xollvm-report.json`。`build-policy.py` 会核对策略源码摘要、目标、object 与报告，拒绝不匹配的对象；下载 ZIP 或报告文件本身不能替代这些检查。也可用匹配的 LLVM 22 与 xollvm 插件自行生成对象。
 
-默认产物使用 ad-hoc 签名供演示测试，**没有 Apple Developer ID 签名或公证**，从互联网下载后可能被 Gatekeeper 拦截。正式分发需要开发者证书与公证；脚本可通过 `CARDGUARD_SIGN_IDENTITY` 使用已有钥匙串证书启用 Hardened Runtime 签名，但不会自动提交公证。构建签名与卡密签发密钥是两套不同用途的身份。
+脚本默认构建本机架构，运行链接同一对象的策略测试；产物在 `dist/macos-<架构>-<随机后缀>/`。Rust 验签库与保护后的策略 object 链接进 `CardGuard.app` 内的 GUI，另保留同源诊断 CLI；程序使用 macOS 默认 Qt 样式。macOS 打包采用 `macdeployqt`，不使用 UPX。
+
+构建后，用本次输出的 `.app` 为本机签发测试卡，并运行回归；`APP` 应填写本次构建的 `CardGuard.app` 绝对路径，也可从 `build/macos-<架构>/artifact.json` 查看：
+
+```bash
+APP='<本次 CardGuard.app 的绝对路径>'
+python3 scripts/issue-demo.py --app "$APP"
+# 默认保存到 .local/demo-card.txt，脚本不向终端打印卡密：
+pbcopy < .local/demo-card.txt
+open "$APP"
+
+python3 scripts/test-macos.py --app "$APP" --token-file .local/demo-card.txt \
+  --report build/macos-local-test.json
+```
+
+在界面中粘贴卡密并校验即可。`issue-demo.py` 默认使用源码中的公开 demo 身份，还支持 `--issuer`、`--subject`、`--valid-hours`、`--output`。为其他测试设备签卡时用 `--device-id` 替代 `--app`，二者互斥。`--app` 模式会在写卡前回验新卡；若所选程序仍内置不同公钥，会拒绝保存并提示重新构建。
+
+本地构建默认使用 ad-hoc 签名，**无需 Apple Developer ID 证书或其私钥**，可以在本机测试；它没有 Developer ID 身份或 Apple 公证，从互联网下载后可能被 Gatekeeper 拦截。正式分发需要另行安排开发者证书与公证；脚本可通过 `CARDGUARD_SIGN_IDENTITY` 使用已有钥匙串证书启用 Hardened Runtime 签名，但不会自动提交公证。Apple 构建签名与 Ed25519 卡密签发是两套不同用途的身份。
 
 ## 环境安装与构建
 
@@ -92,7 +129,9 @@ Qt 6.12 官方仓库已经改为按编译器分目录，aqt 3.3 尚不支持。�
 
 `init-demo.ps1` 首次生成随机 Ed25519 私钥，以 Argon2id（64 MiB、3 次、单线程）派生密钥，使用 ChaCha20-Poly1305 加密私钥。随机口令由当前 Windows 用户 DPAPI 保护，正在使用的身份文件放在受限 ACL 的 `.local`，该目录不提交 Git。
 
-按项目所有者要求，仓库公开了一份现有加密演示私钥的原样快照：[demo/keys/demo.private.json](demo/keys/demo.private.json)。口令、DPAPI 文件和卡密未提交，单独克隆仓库不能解密该快照；初始化脚本不会自动加载它。此身份仅用于 demo，正式发行应另建私钥。
+按项目所有者要求，现有 demo 身份的[加密私钥](demo/keys/demo.private.json)、[公钥](demo/keys/demo.public.hex)与[明文测试口令](demo/keys/demo.passphrase.txt)均已公开。克隆仓库后即可通过 `prepare-demo.py` / `issue-demo.py` 使用这套身份，任何人都可以签出其公钥信任的测试卡。私钥文件仍采用上述加密格式，但配套口令公开后不再具有私密性；正式发行须另建身份，不能沿用它。
+
+Windows 现有 `.local` 身份和 DPAPI 文件保持本机原状、不提交 Git；公开 demo 流程不会搬移或覆盖它们。DPAPI 的本机保护不会使已公开的同一套测试身份重新变成秘密。新建独立正式身份后，须用其公钥重新构建客户端；已有公钥不同的工作目录会被 `prepare-demo.py` 拒绝覆盖。
 
 这是开发便利模式：同一 Windows 用户的进程可以解密 DPAPI 口令，因此它不能替代独立生产签发服务或 HSM。请备份演示身份；若初始化中断，脚本会报告部分身份存在，不会静默覆盖。
 
@@ -129,6 +168,7 @@ UPX 仅保留为遗留可选压缩实验，通过 `install-upx.ps1` / `pack.ps1`
 | `crates/license-client` | 编译公钥、本机身份、Rust 静态库 ABI 与同源诊断 CLI |
 | `crates/license-issuer` | 加密密钥生成及卡密签发 |
 | `scripts` | 安装、构建、签发、测试和打包 |
+| `demo/keys` | 刻意公开的测试私钥、公钥与口令，只供演示 |
 | `.local` | 本机演示密钥和卡密，禁止分发 |
 | `dist/client` | 桌面校验端 |
 

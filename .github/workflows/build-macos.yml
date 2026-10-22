@@ -9,6 +9,7 @@ on:
       - 'crates/**'
       - 'frontend/**'
       - 'tests/**'
+      - 'demo/keys/**'
       - 'config/xollvm-toolchain.json'
       - 'scripts/**'
       - 'Cargo.*'
@@ -83,13 +84,16 @@ jobs:
           path: build/protection
       - name: Validate public trust anchor
         run: |
+          python3 scripts/prepare-demo.py
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          key = os.environ['PUBLIC_KEY_HEX'].strip().lower()
+          key = (os.environ['PUBLIC_KEY_HEX'].strip() or Path('demo/keys/demo.public.hex').read_text().strip()).lower()
           if not re.fullmatch(r'[0-9a-fA-F]{64}', key):
-              raise SystemExit('Set repository variable CARDGUARD_PUBLIC_KEY_HEX to the existing issuer public key.')
+              raise SystemExit('The configured public key must be 64 hexadecimal characters.')
           Path('config/trusted-public-key.hex').write_text(key + '\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('PUBLIC_KEY_HEX=' + key + '\n')
           PY
       - name: Install pinned build tools and Qt
         run: |
@@ -101,6 +105,8 @@ jobs:
           echo "QT_ROOT=$RUNNER_TEMP/qt/6.12.0/macos" >> "$GITHUB_ENV"
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
           rustup target add --toolchain 1.98.0 '${{ matrix.target }}'
+      - name: Test portable demo setup and issuance scripts
+        run: python3 scripts/test-demo-tools.py
       - name: Create disposable test signing identity
         run: |
           cargo build --locked --release -p license-issuer --target '${{ matrix.target }}'
@@ -142,6 +148,25 @@ jobs:
           artifact = json.loads(Path('build/macos-${{ matrix.arch }}/artifact.json').read_text())
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('archive=' + artifact['archive'] + '\n')
+          PY
+      - name: Test the portable public demo identity
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          from pathlib import Path
+          demo_key = Path('demo/keys/demo.public.hex').read_text().strip()
+          if os.environ['PUBLIC_KEY_HEX'] != demo_key:
+              print('Custom trust anchor selected; public demo cards are not applicable to this build.')
+              raise SystemExit(0)
+          artifact = json.loads(Path('build/macos-${{ matrix.arch }}/artifact.json').read_text())
+          token_file = Path(os.environ['RUNNER_TEMP']) / 'public-demo-card.txt'
+          subprocess.run([sys.executable, 'scripts/issue-demo.py', '--app', artifact['app'],
+                          '--issuer', 'target/${{ matrix.target }}/release/license-issuer',
+                          '--subject', 'Portable public demo test', '--valid-hours', '1',
+                          '--output', str(token_file)], check=True)
+          subprocess.run([sys.executable, 'scripts/test-macos.py', '--app', artifact['app'],
+                          '--token-file', str(token_file),
+                          '--report', 'build/macos-${{ matrix.arch }}/public-demo.json'], check=True)
           PY
       - name: Upload final client
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

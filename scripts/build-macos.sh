@@ -35,6 +35,9 @@ for command in cargo rustup cmake ninja python3 xcrun codesign ditto; do
     command -v "$command" >/dev/null || { echo "Missing tool: $command" >&2; exit 1; }
 done
 xcrun --find clang++ >/dev/null
+if [[ ! -e config/trusted-public-key.hex ]]; then
+    python3 scripts/prepare-demo.py
+fi
 python3 - <<'PY'
 from pathlib import Path
 import re

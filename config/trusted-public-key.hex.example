@@ -1,4 +1,5 @@
-# Run the independent issuer keygen command to generate your own keypair.
-# This is a FORMAT EXAMPLE, not an operational trusted key. Never publish the private key.
+# For the intentionally public demo identity, run: python3 scripts/prepare-demo.py
+# For an independent identity, use the issuer keygen command and keep its private key private.
+# This file is a FORMAT EXAMPLE, not an operational trusted key.
 # config/trusted-public-key.hex must contain exactly 64 lowercase hexadecimal characters.
-# Generate that file BEFORE compiling license-client; no default signing key is supplied.
+# Prepare that file BEFORE compiling license-client. Public test material is in demo/keys/.

@@ -42,13 +42,18 @@ CMakeLists.txt.user*
 *.private.pem
 *.key
 *.dpapi
+*.passphrase.txt
 *.pfx
 *.p12
 demo-card.txt
 invalid-card.txt
 
-# 项目所有者明确公开的加密演示私钥快照（不包含口令）
+# 项目所有者明确公开的演示身份，只放行指定三件套与说明
+/demo/keys/*
 !/demo/keys/demo.private.json
+!/demo/keys/demo.passphrase.txt
+!/demo/keys/demo.public.hex
+!/demo/keys/README.md
 
 # 本机选择的验签公钥；CI 通过仓库变量注入，保留 .hex.example
 /config/trusted-public-key.hex

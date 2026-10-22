@@ -2,7 +2,7 @@
 
 默认构建使用 [xollvm v0.11.1 / LLVM 22](https://github.com/und3ath/xollvm/releases/tag/v0.11.1)，将单个授权策略函数 `cardguard_policy_allows` 转换为 VM 执行形式，再作为 object 链接进 Qt 主程序。Rust 验签库同样静态链接进主程序，GUI 不调用外部 `license-client`；该 CLI 保留为诊断和集成工具。
 
-这项保护用于增加所选函数的分析、定位与修改成本。签发操作与私钥解密在管理端进行，仓库中的加密演示快照范围见下述安全设计；可信时间与在线撤销仍需独立机制，保护不承诺无法破解。公开源码允许移除保护后重新构建，已经控制客户端的人仍可能补丁修改验签或结果分支。协议与密钥隔离的边界见 [SECURITY.md](SECURITY.md)。
+这项保护用于增加所选函数的分析、定位与修改成本。仓库 `demo/keys` 的测试私钥、公钥与明文口令均已公开，任何人都能签出测试卡，VM 保护不会为这套身份恢复保密性；正式签发须另建私钥。可信时间与在线撤销仍需独立机制，保护不承诺无法破解。公开源码允许移除保护后重新构建，已经控制客户端的人仍可能补丁修改验签或结果分支。协议与密钥隔离的边界见 [SECURITY.md](SECURITY.md)。
 
 ## 保护范围
 
@@ -31,14 +31,23 @@
 
 macOS CI 先由 Windows job 使用固定 xollvm 工具链生成 `macos-arm64` 和 `macos-x86_64` 两份 Mach-O 策略 object。对应 Mac job 下载同一次工作流的对象与 `protection.json`，用 `build-policy.py --verify-only` 核对源码摘要、目标、object 摘要及保护报告，再在原生 Apple Silicon 或 Intel runner 上链接 Rust、Qt 与策略 object，运行同一组策略测试和 GUI 集成测试。这个路径不要求在 Intel Mac 上用 Homebrew 安装 LLVM 或寻找不匹配的插件。
 
-手工构建时，将同一提交、对应架构的策略 object、`protection.json`、`xollvm-report.json` 放到 `build/protection/macos-<架构>`；也可用匹配的 LLVM 22 与 xollvm 插件通过 `build-policy.py` 自行生成。设置 `QT_ROOT` 后执行：
+Mac 克隆后的本地演示先运行 `python3 scripts/prepare-demo.py`。它准备公开 demo 公钥，已有不同公钥时拒绝覆盖，不修改 `.local` 或 DPAPI；签发用的公开测试私钥和口令已在源码 `demo/keys` 中，不需要从 Windows 解密 DPAPI 文件。
+
+安装 Rust 1.98.0、Xcode Command Line Tools、Qt 6.12.0 共享 SDK、CMake、Ninja 和 GitHub CLI 后，从本仓库与当前策略源码匹配的工作流下载两架构 object 及配套报告：
+
+下载 Actions artifact 可能需要先执行 `gh auth login`，公开仓库也不保证匿名下载。
 
 ```bash
+gh run download '<本仓库run-id>' --repo my-learn-project/rea-test-project \
+  --name virtualized-policies --dir build/protection
+export QT_ROOT="$HOME/Qt/6.12.0/macos"
 export CARDGUARD_POLICY_DIR="$PWD/build/protection/macos-$(uname -m)"
 bash scripts/build-macos.sh
 ```
 
-`CARDGUARD_POLICY_DIR` 默认即为上述目录。两个架构分别构建和测试，不是 Universal 合包。CI 配置及验证命令不等于某次 Mac 构建已经成功，是否产出制品以对应工作流结果为准。
+下载内容包括 `authorization_policy.o`、`protection.json`、`xollvm-report.json`；`build-policy.py` 会核对源摘要、目标、object 与报告，不匹配时拒绝继续。run ID 只代表所选的那次运行，不把旧 artifact 作为永远最新的制品。也可用匹配 LLVM 22 与 xollvm 插件自行生成对象。`CARDGUARD_POLICY_DIR` 默认即为上述目录，两个架构分别构建和测试，不是 Universal 合包。
+
+本次 `.app` 构建完成后，可执行 `python3 scripts/issue-demo.py --app '<本次CardGuard.app路径>'` 生成 `.local/demo-card.txt`，脚本不打印卡密。再执行 `python3 scripts/test-macos.py --app '<本次CardGuard.app路径>' --token-file .local/demo-card.txt --report build/macos-local-test.json` 进行本机回归。详细环境与界面操作见 [README](../README.md)。CI 配置及验证命令不等于某次 Mac 构建已经成功，是否产出制品以对应工作流结果为准。
 
 ## UPX：遗留可选压缩实验
 
@@ -52,6 +61,6 @@ UPX 不属于默认保护步骤。既有 UPX 5.2.1 实验未成功压缩启用 C
 
 Windows 的 `dist/CardGuard-windows-x64.zip` 包含完整 `client` 目录，部署依赖由匹配 Qt SDK 的 `windeployqt` 收集；保留 `qt.conf`、平台/样式插件和许可通知。Qt 替换方式见 [THIRD_PARTY.md](THIRD_PARTY.md)。Rust 已编译进 GUI，不再依赖诊断 CLI 的返回值。
 
-macOS 使用 `macdeployqt` 部署共享 Qt，保留 `.app` 的 framework 链接和签名。默认 ad-hoc 签名仅供本地演示；Developer ID 签名、Hardened Runtime 与 Apple 公证各有独立步骤，脚本不自动提交公证。
+macOS 使用 `macdeployqt` 部署共享 Qt，保留 `.app` 的 framework 链接和签名。本地 ad-hoc 签名不需要 Apple Developer ID 证书或其私钥，适合克隆后在本机测试；Developer ID 签名、Hardened Runtime 与 Apple 公证各有独立步骤，脚本不自动提交公证。Apple 代码签名与公开 demo 的 Ed25519 卡密签发是两类独立身份。
 
 正式签名应在代码变换、链接和可选压缩结束后进行；签名后修改文件会使签名失效。构建报告与同目录 SHA-256 清单只记录制品，不能代替操作系统代码签名或可信更新通道。[Microsoft 签名验证说明](https://learn.microsoft.com/en-us/windows/win32/seccrypto/using-signtool-to-verify-a-file-signature)、[Qt 官方 macOS 部署说明](https://doc.qt.io/qt-6/macos-deployment.html)
