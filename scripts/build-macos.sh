@@ -98,7 +98,7 @@ else
 fi
 codesign --verify --deep --strict --verbose=2 "$app"
 for binary in "$app/Contents/MacOS/CardGuard" "$app/Contents/MacOS/license-client"; do
-    xcrun lipo -verify_arch "$arch" "$binary"
+    xcrun lipo "$binary" -verify_arch "$arch"
 done
 python3 scripts/test-macos.py --app "$app" --report "$build_dir/smoke-release.json"
 archive="$stage/CardGuard-macos-$arch.zip"
