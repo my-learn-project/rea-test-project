@@ -14,7 +14,21 @@ Windows Release 已接入 xollvm v0.11.1 / LLVM 22。官方归档 SHA256 为 `76
 - 完整 ZIP 的 **86 个文件**逐一与分发目录比较 SHA256，一致。分发目录、CMake 输出目录、ZIP 解压目录都在清除 Qt/QML 配置、PATH 仅保留 Windows 系统目录时，通过原生 Windows 插件接受真实卡密，退出码均为 0。
 - 证据保存在忽略的 `build/protected-windows-build.log`、`build/protected-integration.log`、`build/windows-deployment-results.json` 和 `build/protection/windows-x64/`；界面截图已遮蔽机器码和卡密。
 
-本轮 macOS 原生构建结果待 GitHub Actions 验证后记录。以下记录保留此前版本的验证历史；旧版 Mac 制品不能当作本轮 VM 保护版的验证结果。
+本轮 [GitHub Actions 39798138587](https://github.com/my-learn-project/rea-test-project/actions/runs/39798138587) 的两个 Mac job 均已生成最终包，源码提交为 `8d8cba8c3fe8aede916ea6c2a2ce76e39bd43879`。ARM64 / Intel 分别在原生 runner 上通过 Rust 25 项单元测试、同一虚拟化 object 的 4174 项策略用例、真实签发/验签及原生 Cocoa 界面检查；每架构的 `integration.json` 均有 20 条通过记录，最终公钥包的 `smoke-release.json` 均有 13 条通过记录（含套件完成状态）。
+
+Mac 完整测试包括删除 helper 后真实卡密仍有效、篡改卡密无效，以及放入经过控制测试确实返回成功的假 helper 后仍拒绝假卡且不调用 helper。第一轮在测试副本的 `/var` 与 `/private/var` 路径别名比较上误判越界；修复规范化路径后重新运行了两个架构的完整工作流，没有跳过失败用例。
+
+最终下载位于 `dist/macos-protected-39798138587/`，本地核对 ZIP SHA256/CRC、执行权限、Mach-O CPU、framework 版本、许可清单、公钥指纹、源码提交与 VM 保护元数据全部通过。两架构共四份运行报告均成功；记录在 `build/macos-protected-39798138587/download-verification.json`，原生 job 日志保存在 `build/ci-<架构>-39798138587.log`。Mac 原生 `codesign --verify --deep --strict` 通过；本机 Windows 只检查签名结构和制品内容，没有模拟执行 Mac 程序。
+
+| 本轮最终 ZIP | SHA256 |
+| --- | --- |
+| `CardGuard-windows-x64.zip` | `ad392e9aab018bea5897b22ef82c5405451e2d87ec18d16356353fc5d61bc49d` |
+| `CardGuard-macos-arm64.zip` | `2c2cc845ac742e03ae06e152b9a27020e3dcefe154bec9b7f1777174ce72b709` |
+| `CardGuard-macos-x86_64.zip` | `8649bac82b090808de143d4b1cbd696dc6db3032fe800bacb7c08b498dea9b71` |
+
+记录时 GitHub 正发生 [Actions 结果处理延迟](https://www.githubstatus.com/incidents/q29p76qtnkyk)，API/页面状态曾长期停留在 queued/in_progress，但完成日志、最终客户端制品和成功报告已取得并核对；以上结果基于这些实际证据。Mac 包仍为 ad-hoc 签名演示版，没有 Developer ID 签名或 Apple 公证。VM 只保护所列策略函数，不能保证客户端无法被补丁修改。
+
+以下记录保留此前版本的验证历史；旧版 Mac 制品不能当作本轮 VM 保护版的验证结果。
 
 ## 开发环境
 
